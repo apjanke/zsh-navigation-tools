@@ -50,7 +50,7 @@ _nlist_log_and_do() {
 
 _nlist_log() {
     local IFS=" "
-    echo >>~/n-list.log "$*"
+    printf "%3s: %s\n" $SECONDS "$*" >>~/n-list.log
 }
 
 # Outputs a message in the bottom of the screen
@@ -138,7 +138,7 @@ _nlist_create_windows
 # Listening for input
 #
 
-local key keypad
+local key keypad input_status
 
 # Clear input buffer
 zcurses timeout main 0
@@ -237,19 +237,26 @@ while (( 1 )); do
 
     # Wait for input
     zcurses input main key keypad
+    input_status=$?
+    _nlist_log "input \$?=$input_status k='$key' kp='$keypad'"
+    if [[ $input_status != 0 ]]; then
+        # Timeout
+        _nlist_log "timeout"
+        need_redraw=0
+        continue
+    else
+        need_redraw=1
+    fi
 
     # Get the special (i.e. "keypad") key or regular key
-    need_redraw=1
     if [ -n "$key" ]; then
         final_key="$key" 
     elif [ -n "$keypad" ]; then
         final_key="$keypad"
     else
         # Input timeout
-        _nlist_log "input timeout"
-        need_redraw=0
-        zcurses refresh
-        continue
+        _nlist_status_msg "Inproper input detected"
+        zcurses refresh main inner
     fi
 
     n-list-input "$NLIST_CURRENT_IDX" "$NLIST_FROM_WHAT_IDX_LIST_IS_SHOWN" \
