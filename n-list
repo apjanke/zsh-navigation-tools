@@ -70,6 +70,8 @@ _nlist_create_windows() {
     zcurses delwin inner 2>/dev/null
     zcurses addwin main "$term_height" "$term_width" 0 0
     zcurses addwin inner "$inner_height" "$inner_width" 1 1
+    # Use an input timeout to be responsive to window size changes
+    zcurses timeout main 250
     zcurses bg main white/black
     zcurses bg inner white/black
     zcurses border main
@@ -141,7 +143,8 @@ local key keypad
 # Clear input buffer
 zcurses timeout main 0
 zcurses input main key keypad
-zcurses timeout main -1
+# Use an input timeout to be responsive to window resizes
+zcurses timeout main 250
 key=""
 keypad=""
 
@@ -149,91 +152,104 @@ list=( "$@" )
 last_element="$#"
 
 local last_term_size="$LINES $COLUMNS"
+integer need_redraw=1
 while (( 1 )); do
     # Check for window resizing on each pass
     # Check directly, to handle terminals that don't report WINCH
+    # This doesn't fully work, because $LINES and $COLUMNS don't seem to
+    # get updated until input actually happens
+    _nlist_log "step: window size = $LINES $COLUMNS stty $(stty size)"
     if [[ "$LINES $COLUMNS" != $last_term_size ]]; then
         window_resized=1
         last_term_size="$LINES $COLUMNS"
     fi
     if (( window_resized )); then
+        _nlist_log "window_resized"
         _nlist_handle_resize
+        need_redraw=1
     fi
 
     # Do searching (filtering with string)
-    if [ -n "$NLIST_SEARCH_BUFFER" ]; then
-        # Compute new list, col_list ?
-        if [ "$NLIST_SEARCH_BUFFER" != "$prev_search_buffer" ]; then
-            prev_search_buffer="$NLIST_SEARCH_BUFFER"
+    if (( need_redraw )); then
+        _nlist_log redrawing
+        if [ -n "$NLIST_SEARCH_BUFFER" ]; then
+            # Compute new list, col_list ?
+            if [ "$NLIST_SEARCH_BUFFER" != "$prev_search_buffer" ]; then
+                prev_search_buffer="$NLIST_SEARCH_BUFFER"
 
-            list=( "$@" )
-            last_element="$#"
+                list=( "$@" )
+                last_element="$#"
 
-            # First remove non-selectable elements
-            [ "$#NLIST_NONSELECTABLE_ELEMENTS" -gt 0 ] && for i in "${(nO)NLIST_NONSELECTABLE_ELEMENTS[@]}"; do
-                list[$i]=()
-            done
+                # First remove non-selectable elements
+                [ "$#NLIST_NONSELECTABLE_ELEMENTS" -gt 0 ] && for i in "${(nO)NLIST_NONSELECTABLE_ELEMENTS[@]}"; do
+                    list[$i]=()
+                done
 
-            # Next do the filtering
-            list=( "${(@M)list:#(#i)*$NLIST_SEARCH_BUFFER*}" )
-            last_element="$#list"
-            [ "$NLIST_CURRENT_IDX" -gt "$last_element" ] && NLIST_CURRENT_IDX="$last_element"
-            [[ "$NLIST_CURRENT_IDX" -eq 0 && "$last_element" -ne 0 ]] && NLIST_CURRENT_IDX=1
-            (( NLIST_FROM_WHAT_IDX_LIST_IS_SHOWN=0+((NLIST_CURRENT_IDX-1)/page_height)*page_height+1 ))
+                # Next do the filtering
+                list=( "${(@M)list:#(#i)*$NLIST_SEARCH_BUFFER*}" )
+                last_element="$#list"
+                [ "$NLIST_CURRENT_IDX" -gt "$last_element" ] && NLIST_CURRENT_IDX="$last_element"
+                [[ "$NLIST_CURRENT_IDX" -eq 0 && "$last_element" -ne 0 ]] && NLIST_CURRENT_IDX=1
+                (( NLIST_FROM_WHAT_IDX_LIST_IS_SHOWN=0+((NLIST_CURRENT_IDX-1)/page_height)*page_height+1 ))
 
-            local red=$'\x1b[00;31m' reset=$'\x1b[00;00m'
-            col_list=( "${(@)list//(#bi)($NLIST_SEARCH_BUFFER)/$red${match[1]}$reset}" )
+                local red=$'\x1b[00;31m' reset=$'\x1b[00;00m'
+                col_list=( "${(@)list//(#bi)($NLIST_SEARCH_BUFFER)/$red${match[1]}$reset}" )
+            fi
+
+            integer end_idx=$(( NLIST_FROM_WHAT_IDX_LIST_IS_SHOWN + page_height - 1 ))
+            [ "$end_idx" -gt "$last_element" ] && end_idx=last_element
+
+            # Output colored list
+            n-list-draw "$(( (NLIST_CURRENT_IDX-1) % page_height + 1 ))" \
+                "$page_height" "$page_width" 0 1 "$NLIST_TEXT_OFFSET" inner ansi \
+                "${(@)col_list[NLIST_FROM_WHAT_IDX_LIST_IS_SHOWN, end_idx]}"
+        else
+            # There is no search, but there was in previous loop
+            # Enter non-search mode with fresh list array
+            if [ -n "$prev_search_buffer" ]; then
+                prev_search_buffer=""
+                list=( "$@" )
+                last_element="$#"
+            fi
+
+            integer end_idx=$(( NLIST_FROM_WHAT_IDX_LIST_IS_SHOWN + page_height - 1 ))
+            [ "$end_idx" -gt "$last_element" ] && end_idx=last_element
+
+            # Output the list
+            n-list-draw "$(( (NLIST_CURRENT_IDX-1) % page_height + 1 ))" \
+                "$page_height" "$page_width" 0 1 "$NLIST_TEXT_OFFSET" inner ansi \
+                "${(@)list[NLIST_FROM_WHAT_IDX_LIST_IS_SHOWN, end_idx]}"
         fi
 
-        integer end_idx=$(( NLIST_FROM_WHAT_IDX_LIST_IS_SHOWN + page_height - 1 ))
-        [ "$end_idx" -gt "$last_element" ] && end_idx=last_element
-
-        # Output colored list
-        n-list-draw "$(( (NLIST_CURRENT_IDX-1) % page_height + 1 ))" \
-            "$page_height" "$page_width" 0 1 "$NLIST_TEXT_OFFSET" inner ansi \
-            "${(@)col_list[NLIST_FROM_WHAT_IDX_LIST_IS_SHOWN, end_idx]}"
-    else
-        # There is no search, but there was in previous loop
-        # Enter non-search mode with fresh list array
-        if [ -n "$prev_search_buffer" ]; then
-            prev_search_buffer=""
-            list=( "$@" )
-            last_element="$#"
+        if [ "$NLIST_IS_SEARCH_MODE" = "1" ]; then
+            _nlist_status_msg "Filtering with: $NLIST_SEARCH_BUFFER"
+        elif [[ ${NLIST_NONSELECTABLE_ELEMENTS[(r)$NLIST_CURRENT_IDX]} != $NLIST_CURRENT_IDX ]]; then
+            local _txt=""
+            [ -n "$NLIST_GREP_STRING" ] && _txt=" [$NLIST_GREP_STRING]"
+            _nlist_status_msg "Current #$NLIST_USER_CURRENT_IDX (of #$NLIST_USER_LAST_ELEMENT entries)$_txt"
+        else
+            _nlist_status_msg ""
         fi
 
-        integer end_idx=$(( NLIST_FROM_WHAT_IDX_LIST_IS_SHOWN + page_height - 1 ))
-        [ "$end_idx" -gt "$last_element" ] && end_idx=last_element
-
-        # Output the list
-        n-list-draw "$(( (NLIST_CURRENT_IDX-1) % page_height + 1 ))" \
-            "$page_height" "$page_width" 0 1 "$NLIST_TEXT_OFFSET" inner ansi \
-            "${(@)list[NLIST_FROM_WHAT_IDX_LIST_IS_SHOWN, end_idx]}"
+        zcurses border main
+        zcurses refresh main inner
     fi
-
-    if [ "$NLIST_IS_SEARCH_MODE" = "1" ]; then
-        _nlist_status_msg "Filtering with: $NLIST_SEARCH_BUFFER"
-    elif [[ ${NLIST_NONSELECTABLE_ELEMENTS[(r)$NLIST_CURRENT_IDX]} != $NLIST_CURRENT_IDX ]]; then
-        local _txt=""
-        [ -n "$NLIST_GREP_STRING" ] && _txt=" [$NLIST_GREP_STRING]"
-        _nlist_status_msg "Current #$NLIST_USER_CURRENT_IDX (of #$NLIST_USER_LAST_ELEMENT entries)$_txt"
-    else
-        _nlist_status_msg ""
-    fi
-
-    zcurses border main
-    zcurses refresh main inner
 
     # Wait for input
     zcurses input main key keypad
 
     # Get the special (i.e. "keypad") key or regular key
+    need_redraw=1
     if [ -n "$key" ]; then
         final_key="$key" 
     elif [ -n "$keypad" ]; then
         final_key="$keypad"
     else
-        _nlist_status_msg "Inproper input detected"
-        zcurses refresh main inner
+        # Input timeout
+        _nlist_log "input timeout"
+        need_redraw=0
+        zcurses refresh
+        continue
     fi
 
     n-list-input "$NLIST_CURRENT_IDX" "$NLIST_FROM_WHAT_IDX_LIST_IS_SHOWN" \
