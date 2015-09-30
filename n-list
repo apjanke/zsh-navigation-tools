@@ -28,13 +28,15 @@ _nlist_exit() {
     zcurses 2>/dev/null refresh
     zcurses end
     unfunction TRAPWINCH _nlist_status_msg _nlist_create_windows \
-        _nlist_handle_resize nlist_log 2>/dev/null
+        _nlist_handle_resize nlist_log _nlist_log_and_do 2>/dev/null
 }
 
 _nlist_handle_resize() {
+    # Getting zcurses to recognize a window larger than the original size
+    # requires a full end/init; refresh or clear aren't enough
+    zcurses end
+    zcurses init
     zcurses refresh
-    zcurses clear stdscr
-    zcurses border stdscr
     term_height="$LINES"
     term_width="$COLUMNS"
     _nlist_create_windows
@@ -58,6 +60,21 @@ _nlist_status_msg() {
     zcurses clear main eol
     zcurses string main "$1"
 }
+
+_nlist_create_windows() {
+    inner_height=term_height-3  # 2 border lines + 1 status message line
+    inner_width=term_width-2    # 2 border line columns
+    page_height=inner_height
+    page_width=inner_width
+    zcurses delwin main 2>/dev/null
+    zcurses delwin inner 2>/dev/null
+    zcurses addwin main "$term_height" "$term_width" 0 0
+    zcurses addwin inner "$inner_height" "$inner_width" 1 1
+    zcurses bg main white/black
+    zcurses bg inner white/black
+    zcurses border main
+}
+
 
 #
 # Main code
@@ -111,21 +128,6 @@ if [ "$NLIST_START_IN_SEARCH_MODE" -eq 1 ]; then
     NLIST_START_IN_SEARCH_MODE=0
     NLIST_IS_SEARCH_MODE=1
 fi
-
-function _nlist_create_windows() {
-    inner_height=term_height-3
-    inner_width=term_width-2
-    page_height=inner_height
-    page_width=inner_width
-    zcurses delwin main 2>/dev/null
-    zcurses delwin inner 2>/dev/null
-    _nlist_log "term_size $LINES $COLUMNS stty size=$(stty size)"
-    _nlist_log_and_do zcurses addwin main "$term_height" "$term_width" 0 0
-    _nlist_log_and_do zcurses addwin inner "$inner_height" "$inner_width" 1 1
-    zcurses bg main white/black
-    zcurses bg inner white/black
-    zcurses border main
-}
 
 zcurses init
 _nlist_create_windows
